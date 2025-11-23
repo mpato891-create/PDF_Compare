@@ -33,4 +33,4 @@ RUN mkdir -p /root/.EasyOCR
 EXPOSE 8000
 
 # 9. أمر تشغيل السيرفر عند بدء الحاوية
-CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
+CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "7860"]

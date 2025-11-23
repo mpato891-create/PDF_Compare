@@ -84,7 +84,10 @@ function App() {
       formData.append("other", contracts[i]);
 
       try {
-        const res = await axios.post("http://localhost:8000/compare", formData);
+        const res = await axios.post(
+          "https://zainmustafa-pdf-compare.hf.space",
+          formData
+        );
         results.push({
           name: contracts[i].name,
           report: res.data.report,
