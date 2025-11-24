@@ -26,7 +26,7 @@ import InfoIcon from "@mui/icons-material/Info";
 import TranslateIcon from "@mui/icons-material/Translate";
 import axios from "axios";
 
-const API_BASE_URL = "http://localhost:8000";
+const API_BASE_URL = "https://zainmustafa-api-ai.hf.space";
 
 function App() {
   const [standard, setStandard] = useState(null);
