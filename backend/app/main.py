@@ -1,5 +1,4 @@
 # backend/app/main.py
-# Main Application - FastAPI
 
 from fastapi import FastAPI, File, UploadFile, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
@@ -10,7 +9,10 @@ from datetime import datetime
 import logging
 from io import BytesIO
 
-# ✅ Correct relative imports
+# ✅ مكتبة الترجمة الجديدة
+from deep_translator import GoogleTranslator
+
+# ✅ Import our modules
 from .utils import extract_text, get_document_metadata
 from .ai_comparator import compare_with_ai
 
@@ -21,7 +23,7 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# ============= Structured Response Models =============
+# ============= Response Models =============
 
 class DocumentMetadataResponse(BaseModel):
     page_count: int
@@ -58,15 +60,14 @@ class HealthResponse(BaseModel):
     timestamp: str
     uptime_seconds: float
 
-# ============= Application Initialization =============
+class TranslationRequest(BaseModel):
+    text: str
 
-# ✅ This is the variable 'app' that uvicorn is looking for!
+# ============= Application Initialization =============
 app = FastAPI(
-    title="🔍 Smart Contract Comparator API",
-    description="Smart Contract Comparison Engine",
-    version="2.0.0",
-    docs_url="/docs",
-    redoc_url="/redoc",
+    title="🔍 Smart AI Contract Comparator",
+    description="AI-Powered Contract Comparison Engine",
+    version="3.1.0"
 )
 
 # CORS Configuration
@@ -89,91 +90,63 @@ async def _process_file_content(file: UploadFile):
     return content, filename
 
 def _extract_summary_from_report(report: str) -> Dict:
-    """Extract summary from the text report"""
+    """Extracts a simple summary based on emojis."""
     summary = {
         "missing_count": 0,
         "modified_count": 0,
         "additional_count": 0,
     }
     try:
-        summary["missing_count"] = report.count("❌")
-        summary["modified_count"] = report.count("🔄")
-        summary["additional_count"] = report.count("➕")
+        if report:
+            summary["missing_count"] = report.count("❌")
+            summary["modified_count"] = report.count("🔄")
+            summary["additional_count"] = report.count("➕")
     except Exception as e:
         logger.warning(f"Failed to extract summary: {e}")
     return summary
 
-# ============= Middleware =============
+def translate_large_text(text: str) -> str:
+    """
+    Translates large text by splitting into chunks suitable for Google Translate.
+    This prevents timeouts or length errors.
+    """
+    if not text: 
+        return ""
+        
+    translator = GoogleTranslator(source='auto', target='ar')
+    chunks = []
+    # نقسم النص كل 4500 حرف تقريباً (حدود جوجل الآمنة)
+    max_chunk = 4500
+    
+    for i in range(0, len(text), max_chunk):
+        chunk = text[i:i + max_chunk]
+        try:
+            translated_chunk = translator.translate(chunk)
+            chunks.append(translated_chunk)
+        except Exception as e:
+            logger.error(f"Translation failed for chunk: {e}")
+            chunks.append(chunk) # نبقي النص الأصلي في حال الفشل
+            
+    return "\n".join(chunks)
 
-@app.middleware("http")
-async def log_requests(request, call_next):
-    start_time = datetime.now()
-    response = await call_next(request)
-    process_time = (datetime.now() - start_time).total_seconds()
-    logger.info(
-        f"{request.method} {request.url.path} - "
-        f"Status: {response.status_code} - Time: {process_time:.3f}s"
-    )
-    return response
-
-# ============= Endpoints =============
-
-@app.get("/", tags=["health"], response_model=HealthResponse)
-async def root():
-    uptime = (datetime.now() - START_TIME).total_seconds()
-    return HealthResponse(
-        status="healthy",
-        version="2.0.0",
-        timestamp=datetime.now().isoformat(),
-        uptime_seconds=uptime
-    )
-
-@app.get("/health", tags=["health"])
-async def health_check():
-    uptime = (datetime.now() - START_TIME).total_seconds()
-    return {
-        "status": "healthy",
-        "service": "Contract Comparator API",
-        "version": "2.0.0",
-        "uptime_seconds": uptime,
-        "timestamp": datetime.now().isoformat(),
-        "features": {
-            "text_extraction": "enabled",
-            "ai_comparison": "enabled",
-            "multi_language": "enabled (Arabic/English)"
-        }
-    }
-
-@app.post("/extract", tags=["extraction"], response_model=ExtractionResponse)
-async def extract_full_text(
-    file: UploadFile = File(..., description="PDF or DOCX file to extract")
-):
+async def _handle_extraction(file: UploadFile):
+    """Shared logic for extraction endpoints"""
     start_time = datetime.now()
     if not file.filename:
         raise HTTPException(status_code=400, detail="No filename provided")
-    
+
     try:
-        # Read content once
         file_content, filename = await _process_file_content(file)
-        
-        # Create BytesIO stream for processing
         mock_file_stream = BytesIO(file_content)
         mock_file_stream.filename = filename
-        
-        # Extract text
+
+        # Extract text using our robust utils
         text = await extract_text(mock_file_stream, filename)
-        
-        if text.startswith("[Error:") or text.startswith("[Warning:"):
-            raise HTTPException(status_code=422, detail=text)
-        
+
         # Extract metadata
         mock_file_stream.seek(0)
-        metadata_dict = await asyncio.to_thread(
-            get_document_metadata, 
-            mock_file_stream, 
-            filename
-        )
-        
+        metadata_dict = await asyncio.to_thread(get_document_metadata, mock_file_stream, filename)
+
         extraction_time = (datetime.now() - start_time).total_seconds() * 1000
         metadata_dict['extraction_time_ms'] = extraction_time
 
@@ -184,39 +157,44 @@ async def extract_full_text(
             total_length=len(text),
             extraction_time_ms=extraction_time
         )
-    except HTTPException:
-        raise
+
     except Exception as e:
         logger.error(f"Extraction failed: {str(e)}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"Text extraction failed: {str(e)}")
 
-@app.post("/extract-preview", tags=["extraction"])
-async def extract_preview(
-    file: UploadFile = File(..., description="File to preview"),
-    preview_length: int = 20000
-):
-    if not file.filename:
-        raise HTTPException(status_code=400, detail="No filename provided")
-    
-    try:
-        file_content, filename = await _process_file_content(file)
-        mock_file_stream = BytesIO(file_content)
-        mock_file_stream.filename = filename
-        
-        text = await extract_text(mock_file_stream, filename)
+# ============= Endpoints =============
 
-        if text.startswith("[Error:") or text.startswith("[Warning:"):
-            return {"text": text, "is_error": True}
-        
-        return {
-            "text": text[:preview_length],
-            "total_length": len(text),
-            "is_truncated": len(text) > preview_length,
-            "filename": filename
-        }
+@app.get("/", tags=["health"], response_model=HealthResponse)
+async def root():
+    uptime = (datetime.now() - START_TIME).total_seconds()
+    return HealthResponse(
+        status="healthy",
+        version="3.1.0",
+        timestamp=datetime.now().isoformat(),
+        uptime_seconds=uptime
+    )
+
+# ✅ Endpoint for Translation Button
+@app.post("/translate-report", tags=["translation"])
+async def translate_report_endpoint(request: TranslationRequest):
+    """Receives English text and returns Arabic translation (chunked safely)"""
+    try:
+        logger.info("🌍 Translation request received...")
+        # نستخدم thread منفصل لأن الترجمة قد تأخذ وقتاً
+        translated_text = await asyncio.to_thread(translate_large_text, request.text)
+        return {"translated_text": translated_text}
     except Exception as e:
-        logger.error(f"Preview extraction failed: {str(e)}")
-        raise HTTPException(status_code=500, detail=f"Preview extraction failed: {str(e)}")
+        logger.error(f"Translation endpoint error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/extract", tags=["extraction"], response_model=ExtractionResponse)
+async def extract_full_text(file: UploadFile = File(...)):
+    return await _handle_extraction(file)
+
+# ✅ Compatibility Alias for Frontend
+@app.post("/extract-preview", tags=["extraction"], response_model=ExtractionResponse)
+async def extract_preview_legacy(file: UploadFile = File(...)):
+    return await _handle_extraction(file)
 
 @app.post("/compare", tags=["comparison"], response_model=ComparisonResponse)
 async def compare_contracts(
@@ -227,43 +205,44 @@ async def compare_contracts(
     
     if not standard.filename or not other.filename:
         raise HTTPException(status_code=400, detail="Both files are required")
-    
+
     try:
-        logger.info(f"Starting comparison: {standard.filename} vs {other.filename}")
-        
-        # Read contents
+        logger.info(f"Starting AI comparison: {standard.filename} vs {other.filename}")
+
+        # 1. Read Files
         standard_content, standard_filename = await _process_file_content(standard)
         other_content, other_filename = await _process_file_content(other)
         
-        standard_stream = BytesIO(standard_content)
-        other_stream = BytesIO(other_content)
+        std_stream = BytesIO(standard_content)
+        oth_stream = BytesIO(other_content)
 
-        # Concurrent Extraction
+        # 2. Extract Text (Concurrent)
         standard_text, other_text = await asyncio.gather(
-            extract_text(standard_stream, standard_filename),
-            extract_text(other_stream, other_filename)
+            extract_text(std_stream, standard_filename),
+            extract_text(oth_stream, other_filename)
         )
-        
-        # Validations
-        if standard_text.startswith("[Error:") or len(standard_text) < 100:
-            raise HTTPException(status_code=422, detail="Standard contract extraction failed or empty")
-        if other_text.startswith("[Error:") or len(other_text) < 100:
-            raise HTTPException(status_code=422, detail="Comparison contract extraction failed or empty")
-        
-        # AI Comparison
+
+        # Basic Validation
+        if len(standard_text) < 50 or len(other_text) < 50:
+            raise HTTPException(status_code=422, detail="One of the documents is empty or unreadable.")
+
+        # 3. AI Comparison
         report = await asyncio.to_thread(compare_with_ai, standard_text, other_text)
+
+        # 4. Generate Summary stats
         summary = _extract_summary_from_report(report)
         
         processing_time = (datetime.now() - start_time).total_seconds() * 1000
-        
+
         return ComparisonResponse(
             report=report,
             summary=summary,
-            standard_info={"filename": standard_filename, "length": len(standard_text), "preview": standard_text[:500] + "..."},
-            other_info={"filename": other_filename, "length": len(other_text), "preview": other_text[:500] + "..."},
+            standard_info={"filename": standard_filename, "length": len(standard_text)},
+            other_info={"filename": other_filename, "length": len(other_text)},
             processing_time_ms=processing_time,
             timestamp=datetime.now().isoformat()
         )
+
     except HTTPException:
         raise
     except Exception as e:

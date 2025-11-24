@@ -1,36 +1,30 @@
-# 1. اختيار صورة بايثون خفيفة ومستقرة
-FROM python:3.10-slim
+FROM python:3.11-slim
 
-# 2. إعداد متغيرات البيئة لتحسين الأداء
-# (يمنع بايثون من كتابة ملفات pyc ويجعل السجلات تظهر فوراً)
-ENV PYTHONDONTWRITEBYTECODE=1
-ENV PYTHONUNBUFFERED=1
+# Set working directory
+WORKDIR /app
 
-# 3. تثبيت مكتبات النظام الضرورية (أهم خطوة لمشاريع الـ OCR)
-# هذه المكتبات تحتاجها OpenCV و EasyOCR لتعمل على لينكس
+# Install system dependencies (required for OpenCV and PyMuPDF)
 RUN apt-get update && apt-get install -y \
-    build-essential \
+    libgl1-mesa-glx \
     libglib2.0-0 \
-    libsm6 \
-    libxext6 \
-    libxrender-dev \
+    libgomp1 \
     && rm -rf /var/lib/apt/lists/*
 
-# 4. تحديد مسار العمل داخل الحاوية
-WORKDIR /code
+# Copy requirements first (for better caching)
+COPY requirements.txt .
 
-# 5. نسخ ملف المتطلبات وتثبيته أولاً (للاستفادة من الكاشينج)
-COPY requirements.txt /code/
-RUN pip install --no-cache-dir --upgrade -r /code/requirements.txt
+# Install Python dependencies
+RUN pip install --no-cache-dir -r requirements.txt
 
-# 6. نسخ كود المشروع (مجلد app) إلى الحاوية
-COPY ./app /code/app
+# Copy application code
+COPY ./backend/app /app/app
 
-# 7. إنشاء مجلد لموديلات EasyOCR لتجنب مشاكل الصلاحيات (اختياري لكن مفضل)
-RUN mkdir -p /root/.EasyOCR
-
-# 8. فتح المنفذ (Port) الذي سيعمل عليه التطبيق
+# Expose port
 EXPOSE 8000
 
-# 9. أمر تشغيل السيرفر عند بدء الحاوية
-CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "7860"]
+# Health check
+HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
+    CMD python -c "import requests; requests.get('http://localhost:8000/')"
+
+# Run the application
+CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
